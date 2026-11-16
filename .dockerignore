@@ -1,0 +1,8 @@
+venv/
+**/__pycache__/
+.env
+data/
+pgdata/
+scripts/
+*.md
+pyrightconfig.json

@@ -1,0 +1,37 @@
+services:
+  app:
+    build: .
+    image: consum-app
+    container_name: consum
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      HOST: 0.0.0.0
+      PORT: ${APP_PORT:-8090}
+      DATABASE_URL: postgresql://consum:${POSTGRES_PASSWORD}@127.0.0.1:${DB_PORT:-5433}/consum
+    volumes:
+      - ./data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:17-alpine
+    container_name: consum-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: consum
+      POSTGRES_USER: consum
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: Europe/Madrid
+    ports:
+      - "127.0.0.1:${DB_PORT:-5433}:5432"
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U consum -d consum"]
+      interval: 10s
+      timeout: 5s
+      retries: 6

@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Casa · Energía</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <script src="https://unpkg.com/vue@3.4.38/dist/vue.global.prod.js"></script>
+  <link rel="stylesheet" href="/assets/css/app.css">
+</head>
+<body>
+<div id="app"></div>
+
+<script type="text/x-template" id="tpl">
+<div class="app" :class="{ 'no-motion': !settings.motion }">
+  <nav class="rail" aria-label="Secciones">
+    <div class="brand" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg></div>
+    <button :class="{ on: view === 'map' }" @click="view = 'map'" title="Plano" aria-label="Plano">
+      <svg viewBox="0 0 24 24"><path d="M3 10.5 12 4l9 6.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>
+    </button>
+    <button :class="{ on: view === 'history' }" @click="view = 'history'" title="Histórico" aria-label="Histórico">
+      <svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+    </button>
+    <span class="spacer"></span>
+    <button :class="{ on: view === 'settings' }" @click="openSettings" title="Ajustes" aria-label="Ajustes">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+  </nav>
+
+  <div class="main">
+    <header class="top">
+      <div>
+        <h1>{{ homeTitle }}</h1>
+        <div class="sub"><span class="live-dot" v-if="lastFetch"></span>Actualizado {{ lastFetch || '—' }} · cada {{ settings.pollMs / 1000 }} s</div>
+      </div>
+      <div class="kpis">
+        <div class="kpi"><span class="k">Ahora</span><b>{{ fmt(totalPower, 1) }}<small>W</small></b></div>
+        <div class="kpi"><span class="k">Hoy</span><b>{{ fmt(totalToday / 1000, 2) }}<small>kWh</small></b></div>
+        <div class="kpi"><span class="k">Este mes</span><b>{{ fmt(totalMonth / 1000, 1) }}<small>kWh</small></b></div>
+        <div class="kpi"><span class="k">En línea</span><b>{{ onlineCount }}<small>/ {{ plugs.length }}</small></b></div>
+      </div>
+    </header>
+
+    <div v-if="error" class="msg" role="alert"><span>{{ error }}</span><button class="x" @click="error = ''" aria-label="Cerrar">×</button></div>
+
+    <section v-if="setup" class="setup" aria-labelledby="setup-title">
+      <div class="panel su-card">
+        <ol class="su-steps" aria-label="Pasos">
+          <li v-for="(s, i) in ['Tu casa', 'Salas', 'Enchufes']" :key="s" :class="{ on: setup.step === i, done: setup.step > i }">
+            <span class="n">{{ setup.step > i ? '✓' : i + 1 }}</span>{{ s }}
+          </li>
+        </ol>
+
+        <form v-if="setup.step === 0" class="su-body" @submit.prevent="setupNext">
+          <h2 id="setup-title">Te damos la bienvenida</h2>
+          <p class="muted">En tres pasos tendrás tu plano con el consumo de cada enchufe. Todo se puede cambiar después.</p>
+          <label class="su-field">
+            <span>¿Cómo quieres llamar a tu casa?</span>
+            <input id="setup-home" v-model="setup.home" placeholder="Casa" maxlength="40">
+          </label>
+          <div v-if="serverSettings && !serverSettings.credentials" class="su-warn">
+            Faltan <code>TAPO_EMAIL</code> y <code>TAPO_PASSWORD</code> en el archivo <code>.env</code> del servidor. Puedes seguir con el plano, pero no se verán los enchufes hasta que los añadas y reinicies.
+          </div>
+          <div class="su-foot"><span class="spacer"></span><button class="btn primary">Siguiente</button></div>
+        </form>
+
+        <form v-else-if="setup.step === 1" class="su-body" @submit.prevent="setupNext">
+          <h2 id="setup-title">Crea tus salas</h2>
+          <p class="muted">Pon al menos una, con su nombre y medidas aproximadas. Luego, en <b>Editar plano</b>, podrás mover paredes y dibujar salas con cualquier forma.</p>
+          <div class="su-rooms">
+            <div class="su-room-head" aria-hidden="true"><span>Nombre</span><span>Ancho</span><span>Largo</span><span>Tipo</span><span></span></div>
+            <div v-for="(r, i) in setup.rooms" :key="i" class="su-room">
+              <input :id="'setup-room-' + i" v-model="r.name" placeholder="p. ej. Salón" maxlength="40" required :aria-label="'Nombre de la sala ' + (i + 1)">
+              <label class="su-num"><input v-model="r.w" inputmode="decimal" :aria-label="'Ancho de la sala ' + (i + 1) + ' en metros'"><span>m</span></label>
+              <label class="su-num"><input v-model="r.l" inputmode="decimal" :aria-label="'Largo de la sala ' + (i + 1) + ' en metros'"><span>m</span></label>
+              <select v-model="r.kind" :aria-label="'Tipo de la sala ' + (i + 1)">
+                <option value="">Habitación</option>
+                <option value="terrace">Terraza</option>
+                <option value="storage">Trastero</option>
+              </select>
+              <button type="button" class="x" :disabled="setup.rooms.length < 2" @click="setupRemoveRoom(i)" :aria-label="'Quitar la sala ' + (i + 1)">×</button>
+            </div>
+          </div>
+          <button type="button" class="btn su-add" @click="setupAddRoom">+ Añadir otra sala</button>
+          <svg v-if="setupLayout.W && setupLayout.H" class="su-preview" :viewBox="setupVb" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+            <polygon class="house" :points="pts(setupLayout.house)" :style="{ strokeWidth: setupFont * .6 }"/>
+            <g v-for="r in setupLayout.rooms" :key="r.i">
+              <polygon class="su-p-room" :class="r.kind" :points="pts(r.points)" :style="{ strokeWidth: setupFont * .3 }"/>
+              <text class="su-p-name" :x="r.c[0]" :y="r.c[1]" :font-size="setupFont">{{ r.name || 'Sala ' + (r.i + 1) }}</text>
+              <text class="su-p-dim" :x="r.c[0]" :y="r.c[1] + setupFont * 1.3" :font-size="setupFont * .8">{{ fmt(r.w * r.l / 1e4, 1) }} m²</text>
+            </g>
+          </svg>
+          <div class="su-foot">
+            <button type="button" class="btn" @click="setup.step = 0">Atrás</button>
+            <span class="spacer"></span>
+            <button class="btn primary" :disabled="!setupValid || setup.saving">{{ setup.saving ? 'Guardando…' : 'Crear plano' }}</button>
+          </div>
+        </form>
+
+        <div v-else class="su-body">
+          <h2 id="setup-title">Añade tus enchufes</h2>
+          <p class="muted">Busca los enchufes Tapo de tu red o escribe su IP. Si prefieres, hazlo más tarde desde el panel <b>Consumo</b>.</p>
+          <div class="btn-row">
+            <button class="btn primary" :disabled="scanning" @click="scan">{{ scanning ? 'Buscando…' : 'Buscar en la red' }}</button>
+          </div>
+          <form class="add-form" @submit.prevent="addPlug(newIp)">
+            <input id="setup-ip" v-model="newIp" placeholder="IP, p. ej. 192.168.1.50" aria-label="IP del enchufe">
+            <button class="btn" :disabled="busy || !newIp">{{ busy ? 'Conectando…' : 'Añadir' }}</button>
+          </form>
+          <div v-if="found.length" class="panel found">
+            <div v-for="d in found" :key="d.ip" class="found-row">
+              <span>{{ d.ip }} <span class="muted">· {{ d.model }}</span></span>
+              <span v-if="isRegistered(d.ip)" class="muted">añadido</span>
+              <button v-else class="btn" :disabled="busy" @click="addPlug(d.ip)">Añadir</button>
+            </div>
+          </div>
+          <ul v-if="plugs.length" class="su-plugs">
+            <li v-for="p in plugs" :key="p.ip"><span class="dot" :style="{ background: statusColor(p) }"></span>{{ p.name || p.ip }} <span class="muted">· {{ p.ip }}</span></li>
+          </ul>
+          <div class="su-foot">
+            <span class="spacer"></span>
+            <button class="btn primary" @click="finishSetup">{{ plugs.length ? 'Ir al plano' : 'Saltar por ahora' }}</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section v-show="view === 'map' && !setup" class="mapview" ref="mapview">
+      <div class="panel map-panel">
+        <div class="panel-head">
+          <span class="title">{{ zoomRoom ? zoomRoom.name : 'Plano' }}</span>
+          <button v-if="zoomRoom" class="btn" @click="fitHouse">Casa entera</button>
+          <span class="spacer"></span>
+          <div class="seg" role="group" aria-label="Vista">
+            <button :class="{ on: !iso }" @click="iso = false">Planta</button>
+            <button :class="{ on: iso }" :disabled="edit || planEdit" @click="iso = true">Isométrica</button>
+          </div>
+          <button v-if="!planEdit" class="btn" :disabled="edit" @click="startPlanEdit">Editar plano</button>
+          <button v-if="!planEdit" class="btn" :class="{ primary: edit }" @click="toggleEdit">{{ edit ? 'Hecho' : 'Colocar enchufes' }}</button>
+        </div>
+        <div v-if="planEdit" class="tray">
+          <template v-if="drawing">
+            <span class="hint"><b>Nueva sala:</b> haz clic para poner cada esquina. Para cerrarla, clic en la primera o doble clic. Retroceso quita la última, Esc cancela.</span>
+            <button class="btn" @click="cancelDrawing">Cancelar sala</button>
+          </template>
+          <template v-else-if="selRoomObj">
+            <input id="room-name" class="name" v-model="selRoomObj.name" @focus="nameSnap = snapshot()" @change="nameChanged" aria-label="Nombre de la sala">
+            <select v-if="!selRoomObj.stairs" id="room-kind" :value="selRoomObj.kind || ''" @change="setKind($event.target.value)" aria-label="Tipo de sala">
+              <option value="">Habitación</option>
+              <option value="terrace">Terraza</option>
+              <option value="storage">Trastero</option>
+            </select>
+            <span class="muted">{{ fmt(Math.abs(polyArea(selRoomObj.points)) / 1e4, 1) }} m² · {{ selRoomObj.points.length }} esquinas</span>
+            <button class="btn danger" @click="deleteRoom">{{ confirmDelete ? '¿Eliminar ' + selRoomObj.name + '?' : 'Eliminar sala' }}</button>
+          </template>
+          <template v-else-if="selEdge">
+            <span class="hint">Pared de <b>{{ edgeOwner }}</b></span>
+            <input id="edge-len" class="len" v-model="edgeLen" @keyup.enter="applyLen" aria-label="Longitud de la pared en metros"><span>m</span>
+            <button class="btn" @click="applyLen">Aplicar medida</button>
+            <button class="btn" @click="straighten">Enderezar</button>
+          </template>
+          <template v-else>
+            <button class="btn primary" @click="startDrawing">Nueva sala</button>
+            <span class="hint">Arrastra las esquinas (las rellenas son compartidas). Clic en una sala para renombrarla. Doble clic en una pared añade esquina, clic derecho la quita. Alt mueve sin imán.</span>
+          </template>
+          <span class="spacer"></span>
+          <button class="btn" :disabled="!undoStack.length" @click="undo">Deshacer</button>
+          <button class="btn" @click="resetPlan">{{ confirmReset ? '¿Volver al original?' : 'Original' }}</button>
+          <button class="btn" @click="cancelPlanEdit">{{ confirmCancel ? '¿Descartar cambios?' : 'Cancelar' }}</button>
+          <button class="btn primary" :disabled="!planDirty" @click="savePlan">Guardar</button>
+        </div>
+        <div v-if="edit" class="tray">
+          <span class="hint" v-if="placing">Pulsa en el plano para colocar <b>{{ nameOf(placing) }}</b> · Esc para cancelar</span>
+          <span class="hint" v-else>Elige un enchufe y pulsa en el plano. Los que ya están colocados se pueden arrastrar.</span>
+          <button v-for="p in plugs" :key="p.ip" class="chip" :class="{ sel: placing === p.ip }" @click="placing = placing === p.ip ? null : p.ip">
+            <span class="dot" :style="{ background: statusColor(p) }"></span>{{ p.name || p.ip }}<small v-if="p.pos">· colocado</small>
+          </button>
+        </div>
+        <div class="stage" :class="{ iso, edit, planedit: planEdit, drawing, placing: !!placing }">
+          <svg v-if="plan.house" ref="svg" :viewBox="vb.join(' ')" :style="{ '--k': k }" preserveAspectRatio="xMidYMid meet"
+               @pointerdown="onDown" @pointermove="onMove" @pointerup="onUp" @pointercancel="onUp" @dblclick="onDbl" @contextmenu="onCtx">
+            <defs>
+              <pattern id="grid" width="100" height="100" patternUnits="userSpaceOnUse">
+                <path d="M100 0H0V100" fill="none" stroke="var(--grid)" stroke-width="3"/>
+              </pattern>
+              <pattern id="deck" width="240" height="40" patternUnits="userSpaceOnUse">
+                <rect width="240" height="40" fill="var(--deck)"/>
+                <path d="M0 20H240M0 40H240M60 0V20M180 20V40" fill="none" stroke="var(--deck-line)" stroke-width="2.5"/>
+              </pattern>
+              <pattern id="hatch" width="36" height="36" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                <rect width="36" height="36" fill="var(--floor)"/>
+                <path d="M0 0V36" stroke="var(--hatch)" stroke-width="4"/>
+              </pattern>
+            </defs>
+            <rect x="-2000" y="-2000" width="6000" height="5000" fill="url(#grid)"/>
+            <polygon class="house" :points="pts(viewHouse)"/>
+            <g v-for="r in viewRooms" :key="r.id">
+              <g v-if="r.stairs && r.geo" class="stairs" @click="canZoom && zoomTo(r)">
+                <polygon class="st-base" :points="pts(r.points)"/>
+                <polygon v-for="(s, i) in r.geo.steps" :key="i" class="st-step" :points="pts(s.q)" :fill-opacity="s.o"/>
+                <polygon class="st-step st-landing" :points="pts(r.geo.landing)" :fill-opacity="r.geo.landingO"/>
+                <polygon class="st-well" :points="pts(r.geo.well)"/>
+                <polyline v-for="(h, i) in r.geo.rails" :key="'h' + i" class="st-rail" :points="pts(h)"/>
+                <path class="st-walk" :d="r.geo.walk"/>
+                <circle class="st-start" :cx="r.geo.start[0]" :cy="r.geo.start[1]" r="11"/>
+                <path class="st-head" :d="r.geo.head"/>
+                <polygon class="st-outline" :points="pts(r.points)"/>
+                <text class="stairs-name" :x="r.c[0]" :y="r.c[1]">{{ r.name }}</text>
+                <text class="stairs-sub" :x="r.c[0]" :y="r.c[1] + 30 * k">Zona común · {{ r.geo.count }} peldaños</text>
+              </g>
+              <g v-else-if="r.kind === 'terrace'" class="terrace" @click="canZoom && zoomTo(r)">
+                <polygon class="tr-deck" :points="pts(r.points)"/>
+                <polygon class="room tr-heat" :points="pts(r.points)" :fill-opacity="heat(r) - .04"/>
+                <text class="room-name" :x="r.c[0]" :y="r.c[1]">{{ r.name }}</text>
+                <text class="room-val" :x="r.c[0]" :y="r.c[1] + 32 * k">Exterior · {{ fmt(r.area, 1) }} m² · {{ fmt(roomPower(r), 0) }} W</text>
+              </g>
+              <g v-else-if="r.kind === 'storage'" class="storage" @click="canZoom && zoomTo(r)">
+                <polygon class="sg-hatch" :points="pts(r.points)"/>
+                <polygon class="room" :points="pts(r.points)" :fill-opacity="heat(r) - .04"/>
+                <text class="room-name" :x="r.c[0]" :y="r.c[1]">{{ r.name }}</text>
+                <text class="room-val" :x="r.c[0]" :y="r.c[1] + 32 * k">{{ fmt(r.area, 1) }} m² · {{ fmt(roomPower(r), 0) }} W</text>
+              </g>
+              <template v-else>
+                <polygon class="room" :points="pts(r.points)" :fill-opacity="heat(r)" @click="canZoom && zoomTo(r)"/>
+                <text class="room-name" :x="r.c[0]" :y="r.c[1]">{{ r.name }}</text>
+                <text class="room-val" :x="r.c[0]" :y="r.c[1] + 32 * k">{{ fmt(roomPower(r), 0) }} W</text>
+              </template>
+            </g>
+            <g class="north" :transform="`translate(${houseBox[2] - 40} ${houseBox[3] - 40}) scale(${k}) rotate(${plan.northDeg || 0})`">
+              <path d="M0,-70 L22,10 L0,-6 L-22,10 Z"/>
+              <text x="0" y="-86" :transform="`rotate(${-(plan.northDeg || 0)} 0 -86)`">N</text>
+            </g>
+            <g v-for="p in placed" :key="p.ip" class="marker" :class="[state(p), { hl: isHl(p.ip) }]" :data-marker="p.ip"
+               :transform="`translate(${posOf(p)[0]} ${posOf(p)[1]}) scale(${k})`"
+               @mouseenter="hover = p.ip" @mouseleave="hover = null" @click="selected = selected === p.ip ? null : p.ip">
+              <circle class="halo" r="80"/>
+              <circle class="core" r="34"/>
+              <path class="glyph" d="M4-18-11 3h9l-3 15L10-3H1z"/>
+              <text class="m-name" y="70">{{ p.name || p.ip }}</text>
+              <text class="m-val" y="100">{{ p.online && p.energy_monitoring ? fmt(p.power_w, 1) + ' W' : label(p) }}</text>
+            </g>
+            <g v-if="planEdit">
+              <polygon v-if="selRoomObj" class="pe-room-sel" :points="pts(selRoomObj.points)"/>
+              <line v-for="e in peEdges" :key="e.key" class="pe-edge" :class="{ sel: selEdge && selEdge.o === e.o && selEdge.i === e.i }"
+                    :data-edge="e.o + ':' + e.i" :x1="e.a[0]" :y1="e.a[1]" :x2="e.b[0]" :y2="e.b[1]"/>
+              <text v-for="(d, i) in peDims" :key="'d' + i" class="pe-dim" :x="d.x" :y="d.y" :transform="`rotate(${d.ang} ${d.x} ${d.y})`">{{ d.text }}</text>
+              <circle v-if="snapHint" class="pe-snap" :cx="snapHint[0]" :cy="snapHint[1]" :r="34 * k"/>
+              <circle v-for="n in nodes" :key="n.id" class="pe-node" :class="{ sel: selNode === n.id, shared: n.members.length > 1 }"
+                      :data-node="n.id" :cx="nodePos(n)[0]" :cy="nodePos(n)[1]" :r="16 * k"/>
+              <g v-if="drawing && drawPts.length">
+                <polygon class="pe-draw-fill" :points="pts(drawPreview)"/>
+                <polyline class="pe-draw-line" :points="pts(drawPreview)"/>
+                <circle v-for="(q, i) in drawPts" :key="'p' + i" class="pe-draw-pt" :class="{ first: i === 0 }"
+                        :cx="q[0]" :cy="q[1]" :r="(i === 0 && drawPts.length >= 3 ? 24 : 13) * k"/>
+              </g>
+            </g>
+          </svg>
+          <div v-else class="empty"><button class="btn primary" @click="openSetup">Crear el plano</button></div>
+        </div>
+      </div>
+
+      <aside class="devices">
+        <div class="dev-head">
+          <h2>Consumo</h2>
+          <button class="btn" @click="adding = !adding">Añadir</button>
+          <button class="btn" :disabled="scanning" @click="scan">{{ scanning ? 'Buscando…' : 'Buscar' }}</button>
+        </div>
+        <form v-if="adding" class="add-form" @submit.prevent="addPlug(newIp)">
+          <input id="new-ip" v-model="newIp" placeholder="IP, p. ej. 192.168.1.50" aria-label="IP del enchufe">
+          <button class="btn primary" :disabled="busy || !newIp">{{ busy ? 'Conectando…' : 'Añadir' }}</button>
+        </form>
+        <div v-if="found.length" class="panel found">
+          <div v-for="d in found" :key="d.ip" class="found-row">
+            <span>{{ d.ip }} <span class="muted">· {{ d.model }}</span></span>
+            <span v-if="isRegistered(d.ip)" class="muted">registrado</span>
+            <button v-else class="btn" :disabled="busy" @click="addPlug(d.ip)">Registrar</button>
+          </div>
+        </div>
+        <p v-if="!plugs.length" class="muted">No hay enchufes registrados. Añade uno por IP o busca en la red.</p>
+
+        <article v-for="p in plugs" :key="p.ip" class="panel card" :class="[state(p), { hl: isHl(p.ip) }]" :data-card="p.ip"
+                 @mouseenter="hover = p.ip" @mouseleave="hover = null" @click="selected = selected === p.ip ? null : p.ip">
+          <span class="port" v-if="p.pos"></span>
+          <div class="c-head">
+            <span class="dot" :style="{ background: statusColor(p), marginTop: '6px' }"></span>
+            <div style="min-width:0">
+              <div class="c-name">{{ p.name || p.ip }}</div>
+              <div class="c-sub">{{ p.model || '?' }} · {{ p.ip }}</div>
+            </div>
+            <span class="pill" :class="{ ok: p.online && p.is_on, err: !p.online }">{{ label(p) }}</span>
+          </div>
+          <template v-if="p.online">
+            <div class="c-power" v-if="p.energy_monitoring">{{ fmt(p.power_w, 1) }}<small>W</small></div>
+            <div class="c-power" v-else><small>Sin medición</small></div>
+            <div class="share" v-if="p.energy_monitoring" :title="`${fmt(share(p), 0)} % del consumo actual`"><i :style="{ width: share(p) + '%' }"></i></div>
+            <dl class="meta">
+              <template v-if="p.energy_monitoring">
+                <div><dt>Hoy</dt><dd>{{ fmt(p.today_energy_wh / 1000, 3) }} kWh</dd></div>
+                <div><dt>Este mes</dt><dd>{{ fmt(p.month_energy_wh / 1000, 2) }} kWh</dd></div>
+                <div><dt>Uso hoy</dt><dd>{{ mins(p.today_runtime_min) }}</dd></div>
+              </template>
+              <div><dt>Wi‑Fi</dt><dd>{{ p.rssi }} dBm</dd></div>
+              <div><dt>Ubicación</dt><dd>{{ roomOf(p) }}</dd></div>
+            </dl>
+          </template>
+          <div v-else class="c-err">Sin conexión<span v-if="p.error">: {{ p.error }}</span></div>
+          <div class="c-actions" v-if="edit" @click.stop>
+            <button class="btn" @click="placing = p.ip">{{ p.pos ? 'Mover' : 'Colocar' }}</button>
+            <button class="btn" v-if="p.pos" @click="savePos(p.ip, null)">Quitar del plano</button>
+            <span class="spacer"></span>
+            <button class="btn" @click="removePlug(p.ip)">Eliminar</button>
+          </div>
+        </article>
+      </aside>
+
+      <svg v-if="settings.wires" class="wires" aria-hidden="true">
+        <g v-for="p in placed" :key="p.ip" class="wire" :class="[state(p), { hl: isHl(p.ip), dim: (hover || selected) && !isHl(p.ip) }]"
+           :data-wire="p.ip" :style="{ '--dur': dur(p) + 's', '--w': width(p) + 'px' }">
+          <path class="base"/><path class="flow"/>
+        </g>
+      </svg>
+    </section>
+
+    <section v-show="view === 'history' && !setup" class="hist">
+      <div class="hist-bar">
+        <div class="yr">
+          <button class="btn" @click="setYear(year - 1)" aria-label="Año anterior">‹</button>
+          <b>{{ year }}</b>
+          <button class="btn" @click="setYear(year + 1)" :disabled="year >= thisYear" aria-label="Año siguiente">›</button>
+        </div>
+        <div class="seg" role="group" aria-label="Unidad">
+          <button :class="{ on: unit === 'kwh' }" @click="setUnit('kwh')">kWh</button>
+          <button :class="{ on: unit === 'eur' }" @click="setUnit('eur')">€</button>
+        </div>
+        <div v-if="unit === 'eur'" class="seg" role="group" aria-label="Tarifa">
+          <button :class="{ on: tariff === 'pvpc' }" @click="setTariff('pvpc')" title="Precio real de cada hora (Red Eléctrica)">PVPC</button>
+          <button :class="{ on: tariff === 'fixed' }" @click="setTariff('fixed')">Precio fijo</button>
+        </div>
+        <label v-if="unit === 'eur' && tariff === 'fixed'" class="price">Precio
+          <input id="price" type="number" step="0.01" min="0" v-model.number="price" @change="savePrefs"> €/kWh
+        </label>
+        <span class="spacer"></span>
+        <span class="muted" v-if="histLoading || hoursLoading">Actualizando…</span>
+      </div>
+
+      <div class="tiles">
+        <div v-for="t in tiles" :key="t.label" class="panel tile">
+          <span class="k">{{ t.label }}</span>
+          <b>{{ t.value }}</b>
+          <span v-if="t.delta" class="d" :class="t.delta.up ? 'up' : 'down'">{{ t.delta.up ? '▲' : '▼' }} {{ t.delta.text }}</span>
+          <span v-else class="d">{{ t.sub || ' ' }}</span>
+        </div>
+      </div>
+
+      <div class="legend" v-if="series.length > 1">
+        <span v-for="sr in series" :key="sr.ip"><span class="sw" :style="{ background: sr.color }"></span>{{ sr.name }}<span v-if="sr.error" class="muted">({{ sr.error }})</span></span>
+      </div>
+
+      <div class="hist-grid">
+        <div class="panel chart-card">
+          <div class="ch-head"><h3>Por mes · {{ year }}</h3><span>{{ unitLabel }} · pulsa un mes</span></div>
+          <col-chart :cols="monthCols" :unit="unitLabel" :height="190" @pick="i => setMonth(i + 1)"></col-chart>
+        </div>
+
+        <div class="panel chart-card">
+          <div class="ch-head"><h3>Reparto de {{ monthLong }}</h3><span>{{ unitLabel }}</span></div>
+          <div v-if="shareRows.length">
+            <div v-for="r in shareRows" :key="r.ip" class="share-row">
+              <span class="nm"><span class="sw" :style="{ background: r.color }"></span>{{ r.name }}</span>
+              <span class="vl">{{ fu(r.v, unitLabel) }}<small>{{ r.pct }} %</small></span>
+              <span class="bar"><i :style="{ width: r.pct + '%', background: r.color }"></i></span>
+            </div>
+          </div>
+          <div v-else class="empty-note">Sin consumo registrado en {{ monthLong }}.</div>
+        </div>
+
+        <div class="panel chart-card wide">
+          <div class="ch-head"><h3>{{ monthLong }} {{ year }}, por días</h3><span>{{ unitLabel }} · pulsa un día para ver sus horas</span></div>
+          <col-chart :cols="dayCols" :unit="unitLabel" :height="190" :dim="false" @pick="i => pickDay(i + 1)"></col-chart>
+          <p class="note">Los días rayados no tienen detalle. El enchufe solo recuerda 90 días por días y 7 por horas; desde que el servidor los copia a su base de datos ya no se pierden.</p>
+          <p class="note" v-if="storage">
+            <span :style="{ color: storage.ok ? 'var(--ok)' : 'var(--err)' }">●</span>
+            {{ storage.ok ? 'Guardando el historial' : 'No se puede guardar el historial' }} en {{ storage.backend === 'postgres' ? 'Postgres' : 'SQLite' }} ({{ storage.target }})<template v-if="storage.ok"> · {{ storage.hourly_rows }} horas y {{ storage.daily_rows }} días<template v-if="storage.first_day"> desde el {{ storage.first_day }}</template><template v-if="storage.last_sync"> · última copia {{ storage.last_sync.slice(11, 16) }}</template></template><template v-if="storage.error"> · {{ storage.error }}</template>
+          </p>
+          <details class="tbl">
+            <summary>Ver la tabla de {{ monthLong }}</summary>
+            <div class="scroll">
+              <table>
+                <thead><tr><th>Día</th><th v-for="sr in series" :key="sr.ip">{{ sr.name }}</th><th>Total</th></tr></thead>
+                <tbody>
+                  <tr v-for="c in dayCols" :key="c.key" v-show="c.total > 0">
+                    <td>{{ c.short }}</td><td v-for="sg in c.segs" :key="sg.name">{{ fu(sg.v, unitLabel) }}</td><td><b>{{ fu(c.total, unitLabel) }}</b></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </details>
+        </div>
+
+        <div class="panel chart-card wide">
+          <div class="ch-head"><h3>{{ selDay ? selDayLabel + ', por horas' : 'Por horas' }}</h3><span>{{ hourUnit }}</span></div>
+          <col-chart v-if="hourCols" :cols="hourCols" :unit="hourUnit" :height="170"></col-chart>
+          <div v-else class="empty-note">{{ hourNote }}</div>
+        </div>
+
+        <div class="panel chart-card">
+          <div class="ch-head"><h3>Precio de la luz{{ selDay ? ', ' + selDayLabel.toLowerCase() : '' }}</h3><span>€/kWh · PVPC</span></div>
+          <div class="legend">
+            <span><span class="sw" style="background: var(--p1)"></span>Punta</span>
+            <span><span class="sw" style="background: var(--p2)"></span>Llano</span>
+            <span><span class="sw" style="background: var(--p3)"></span>Valle</span>
+            <span v-if="priceCols" class="muted">· resaltadas, las 3 horas más baratas</span>
+          </div>
+          <col-chart v-if="priceCols" :cols="priceCols" unit="€/kWh" :height="170" :dim="false"></col-chart>
+          <div v-else class="empty-note">{{ selDay ? 'Aún no hay precios de este día: los de mañana se publican hacia las 20:15.' : 'Pulsa un día para ver sus precios.' }}</div>
+          <p class="note">PVPC de Red Eléctrica: precio de la energía con peajes y cargos, sin IVA, impuesto eléctrico ni término de potencia.</p>
+        </div>
+
+        <div class="panel chart-card">
+          <div class="ch-head"><h3>Periodos y consejos</h3><span>{{ monthLong }}</span></div>
+          <ul class="tips" v-if="tips.length">
+            <li v-for="t in tips" :key="t.text"><span class="ic" aria-hidden="true">{{ t.icon }}</span><span v-html="t.text"></span></li>
+          </ul>
+          <template v-if="periodRows">
+            <div class="sub-h">Tu consumo por periodos</div>
+            <div class="per-bar" :aria-label="periodRows.map(r => r.name + ' ' + r.pct + ' %').join(', ')">
+              <i v-for="r in periodRows" :key="r.id" v-show="r.pct > 0" :style="{ width: r.pct + '%', background: r.color }"></i>
+            </div>
+            <div v-for="r in periodRows" :key="r.id" class="per-row">
+              <span><span class="sw" :style="{ background: r.color }"></span>{{ r.name }} <span class="muted">{{ r.hours }}</span></span>
+              <span>{{ fu(r.kwh, 'kWh') }} <span class="muted">{{ r.pct }} %</span></span>
+              <span>{{ fu(r.eur, '€') }} <span class="muted">{{ r.avg != null ? fu(r.avg, '€/kWh') : '' }}</span></span>
+            </div>
+            <p class="note">Calculado con el detalle por horas, que cubre el {{ Math.round(cost.coverage * 100) }} % del consumo de {{ monthLong }}.</p>
+          </template>
+          <div v-else-if="!tips.length" class="empty-note">Sin detalle por horas en {{ monthLong }} para repartir el consumo por periodos.</div>
+        </div>
+      </div>
+    </section>
+
+    <section v-if="view === 'settings' && !setup" class="settings">
+      <div class="panel set-group">
+        <h2>Apariencia</h2>
+        <div class="set-row">
+          <div class="lbl"><b>Tema</b><span>"Sistema" sigue el modo claro u oscuro de tu dispositivo.</span></div>
+          <div class="seg" role="group" aria-label="Tema">
+            <button v-for="o in [['system', 'Sistema'], ['light', 'Claro'], ['dark', 'Oscuro']]" :key="o[0]" :class="{ on: settings.theme === o[0] }" @click="setSetting('theme', o[0])">{{ o[1] }}</button>
+          </div>
+        </div>
+        <div class="set-row">
+          <div class="lbl"><b>Animaciones</b><span>Corriente en los cables, pulsos y transiciones.</span></div>
+          <button class="switch" role="switch" :aria-checked="String(settings.motion)" aria-label="Animaciones" @click="setSetting('motion', !settings.motion)"></button>
+        </div>
+        <div class="set-row">
+          <div class="lbl"><b>Al abrir la app</b><span>Qué sección se ve primero.</span></div>
+          <div class="seg" role="group" aria-label="Vista inicial">
+            <button :class="{ on: settings.startView === 'map' }" @click="setSetting('startView', 'map')">Plano</button>
+            <button :class="{ on: settings.startView === 'history' }" @click="setSetting('startView', 'history')">Histórico</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel set-group">
+        <h2>Plano</h2>
+        <div class="set-row" v-if="plan.house">
+          <div class="lbl"><b>Nombre de la casa</b><span>Aparece arriba, en la cabecera.</span></div>
+          <input id="set-home" class="set-input" v-model="homeName" placeholder="Casa" maxlength="40" @change="saveHomeName" @keyup.enter="$event.target.blur()">
+        </div>
+        <div class="set-row">
+          <div class="lbl"><b>Cables hacia las tarjetas</b><span>Une cada enchufe del plano con su tarjeta de consumo.</span></div>
+          <button class="switch" role="switch" :aria-checked="String(settings.wires)" aria-label="Cables hacia las tarjetas" @click="setSetting('wires', !settings.wires)"></button>
+        </div>
+        <div class="set-row">
+          <div class="lbl"><b>Colorear salas por consumo</b><span>Cuanto más consume una sala, más intenso su color.</span></div>
+          <button class="switch" role="switch" :aria-checked="String(settings.roomHeat)" aria-label="Colorear salas por consumo" @click="setSetting('roomHeat', !settings.roomHeat)"></button>
+        </div>
+      </div>
+
+      <div class="panel set-group">
+        <h2>Consumo y precios</h2>
+        <div class="set-row">
+          <div class="lbl"><b>Unidad del histórico</b></div>
+          <div class="seg" role="group" aria-label="Unidad">
+            <button :class="{ on: unit === 'kwh' }" @click="setUnit('kwh')">kWh</button>
+            <button :class="{ on: unit === 'eur' }" @click="setUnit('eur')">€</button>
+          </div>
+        </div>
+        <div class="set-row">
+          <div class="lbl"><b>Tarifa</b><span>PVPC usa el precio real de cada hora de Red Eléctrica.</span></div>
+          <div class="seg" role="group" aria-label="Tarifa">
+            <button :class="{ on: tariff === 'pvpc' }" @click="setTariff('pvpc')">PVPC</button>
+            <button :class="{ on: tariff === 'fixed' }" @click="setTariff('fixed')">Precio fijo</button>
+          </div>
+        </div>
+        <div class="set-row" v-if="tariff === 'fixed'">
+          <div class="lbl"><b>Precio fijo</b><span>El de tu contrato, sin impuestos.</span></div>
+          <label class="price"><input id="set-price" type="number" step="0.01" min="0" v-model.number="price" @change="savePrefs"> €/kWh</label>
+        </div>
+        <div class="set-row">
+          <div class="lbl"><b>Refresco de la pantalla</b><span>Cada cuánto se piden los datos en directo al servidor.</span></div>
+          <select id="set-poll" :value="settings.pollMs" @change="setSetting('pollMs', +$event.target.value)" aria-label="Refresco de la pantalla">
+            <option :value="3000">3 s</option><option :value="5000">5 s</option><option :value="10000">10 s</option><option :value="30000">30 s</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="panel set-group">
+        <h2>Datos</h2>
+        <dl class="kv" v-if="storage">
+          <dt>Base de datos</dt><dd><span :style="{ color: storage.ok ? 'var(--ok)' : 'var(--err)' }">●</span> {{ storage.backend === 'postgres' ? 'Postgres' : 'SQLite' }} · {{ storage.target }}</dd>
+          <dt>Guardado</dt><dd>{{ storage.hourly_rows }} horas y {{ storage.daily_rows }} días<template v-if="storage.first_day">, desde el {{ storage.first_day }}</template></dd>
+          <dt>Última copia</dt><dd>{{ storage.last_sync ? storage.last_sync.replace('T', ' ') : '—' }}</dd>
+          <template v-if="storage.error"><dt>Error</dt><dd>{{ storage.error }}</dd></template>
+        </dl>
+        <div class="btn-row">
+          <button class="btn" :disabled="syncing" @click="syncNow">{{ syncing ? 'Copiando…' : 'Copiar ahora' }}</button>
+          <a class="btn" href="/api/export?kind=daily" download>CSV por días</a>
+          <a class="btn" href="/api/export?kind=hourly" download>CSV por horas</a>
+        </div>
+        <p class="note">El CSV por horas incluye el precio PVPC y el coste de cada hora. Se abre bien en Excel.</p>
+        <h2>Servidor</h2>
+        <dl class="kv" v-if="serverSettings">
+          <dt>Sondeo de enchufes</dt><dd>cada {{ serverSettings.poll_interval }} s (espera hasta {{ serverSettings.poll_timeout }} s)</dd>
+          <dt>Copia del historial</dt><dd>cada {{ serverSettings.sync_minutes }} min</dd>
+          <dt>Enchufes</dt><dd>{{ serverSettings.plugs }}</dd>
+        </dl>
+        <p class="note">Se cambian en el archivo <code>.env</code> del servidor y se aplican al reiniciarlo. Lo demás de esta página se guarda en este navegador.</p>
+      </div>
+    </section>
+  </div>
+</div>
+</script>
+<script src="/assets/js/geometry.js"></script>
+<script src="/assets/js/format.js"></script>
+<script src="/assets/js/chart.js"></script>
+<script src="/assets/js/app.js"></script>
+</body>
+</html>
