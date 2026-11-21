@@ -8,6 +8,12 @@ Panel para enchufes Tapo con medición de consumo (P110, P110M, P115…): consum
 - Coste real con PVPC (Red Eléctrica), reparto por periodos 2.0TD y consejos de horas baratas.
 - Tema claro y oscuro, exportación a CSV.
 
+![Plano de la casa con los enchufes y la bombilla colocados, y sus tarjetas de consumo](docs/img/plano.png)
+
+![Histórico de consumo por meses, días y horas](docs/img/historico.png)
+
+![Precio PVPC del día, reparto por periodos y consejos de horas baratas](docs/img/precios.png)
+
 ## Primeros pasos
 
 ```bash
@@ -23,7 +29,7 @@ La primera vez se abre un asistente:
 2. **Salas**: al menos una, con nombre, medidas y tipo (habitación, terraza o trastero).
 3. **Enchufes**: búsqueda en la red o alta por IP. Se puede saltar.
 
-Después, **Editar plano** permite mover paredes, añadir esquinas y dibujar salas con cualquier forma, y **Colocar enchufes** sitúa cada enchufe en su sala.
+Después, **Editar plano** permite mover paredes, añadir esquinas y dibujar salas con cualquier forma, y **Colocar dispositivos** sitúa cada enchufe o bombilla en su sala.
 
 > No arranques dos instancias contra los mismos enchufes a la vez: si los sondean dos programas, responden mal.
 
