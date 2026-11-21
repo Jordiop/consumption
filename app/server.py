@@ -11,6 +11,7 @@ from itertools import zip_longest
 
 from aiohttp import web
 
+from .antela import BadInput, Bulb, validate_change
 from .config import WEB_DIR, data_dir, load_env, num
 from .prices import Prices, cost_report, month_bounds
 from .recorder import Recorder
@@ -172,6 +173,42 @@ async def scan(request: web.Request):
         return error(str(exc), 500)
 
 
+@routes.get("/api/bulb")
+async def bulb_status(request: web.Request):
+    return web.json_response(request.app["bulb"].to_dict())
+
+
+@routes.patch("/api/bulb")
+async def bulb_change(request: web.Request):
+    try:
+        change = validate_change(await body(request))
+    except BadInput as exc:
+        raise BadRequest(str(exc))
+    try:
+        return web.json_response(await request.app["bulb"].apply(change))
+    except ConnectionError as exc:
+        return error(str(exc), 502)
+
+
+@routes.put("/api/bulb/pos")
+async def bulb_pos(request: web.Request):
+    pos = (await body(request)).get("pos")
+    if pos is not None and not is_point(pos):
+        raise BadRequest("pos debe ser [x, y] en cm o null")
+    request.app["bulb"].set_pos(pos)
+    return web.json_response({"pos": pos})
+
+
+@routes.put("/api/bulb/schedules")
+async def bulb_schedules(request: web.Request):
+    data = await body(request)
+    try:
+        schedules = request.app["bulb"].save_schedules(data.get("schedules"))
+    except BadInput as exc:
+        raise BadRequest(str(exc))
+    return web.json_response({"schedules": schedules})
+
+
 @routes.get("/api/plan")
 async def get_plan(request: web.Request):
     return web.json_response(request.app["plan"].load())
@@ -310,6 +347,8 @@ async def on_startup(app: web.Application):
     if registry.credentials is None:
         log.warning("Faltan TAPO_EMAIL y TAPO_PASSWORD: no se podrá hablar con los enchufes")
     registry.start()
+    bulb = app["bulb"] = Bulb()
+    bulb.start()
 
     store = app["store"] = Store(os.environ.get("DATABASE_URL"), data_dir() / os.environ.get("SQLITE_PATH", "consum.db"))
     try:
@@ -325,6 +364,7 @@ async def on_startup(app: web.Application):
 async def on_cleanup(app: web.Application):
     await app["recorder"].stop()
     await app["registry"].stop()
+    await app["bulb"].stop()
     app["store"].close()
 
 

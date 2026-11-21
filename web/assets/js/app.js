@@ -17,7 +17,7 @@ createApp({
   template: '#tpl',
   data: () => ({
     plugs: [], found: [], newIp: '', error: '', busy: false, scanning: false, adding: false, lastFetch: '',
-    settings: { theme: 'system', motion: true, startView: 'map', wires: true, roomHeat: true, pollMs: 3000 },
+    settings: { theme: 'system', motion: true, startView: 'map', wires: true, roomHeat: true, pollMs: 3000, showPlugs: true, showBulbs: true },
     serverSettings: null, syncing: false,
     view: 'map', plan: { house: null, rooms: [] }, vb: [0, 0, 100, 100], zoomRoom: null, iso: false,
     edit: false, placing: null, drag: null, dragPos: null, hover: null, selected: null,
@@ -30,12 +30,20 @@ createApp({
     unit: 'kwh', price: 0.15, selDay: null, hours: [], hoursLoading: false, hourNote: '', storage: null,
     tariff: 'pvpc', cost: null, dayPrices: null, todayPrices: null, tomorrowPrices: null,
     setup: null, homeName: '',
+    bulb: null, bulbHold: 0, schedules: [], schedSaving: false,
+    dayLetters: ['L', 'M', 'X', 'J', 'V', 'S', 'D'],
+    bulbColors: ['#ff0000', '#ff8000', '#ffd000', '#00ff40', '#00c8ff', '#0040ff', '#a000ff', '#ff00a0'],
   }),
   computed: {
     houseBox() { return this.plan.house ? bbox(this.plan.house) : [0, 0, 100, 100]; },
     houseVb() { const b = this.houseBox, pad = 160; return [b[0] - pad, b[1] - pad, b[2] - b[0] + pad * 2, b[3] - b[1] + pad * 2]; },
     k() { return Math.max(.35, this.vb[2] / this.houseVb[2]); },
-    placed() { return this.plugs.filter(p => this.posOf(p)); },
+    showPlugs() { return this.edit || this.settings.showPlugs; },
+    showBulbs() { return this.edit || this.settings.showBulbs; },
+    placed() { return this.showPlugs ? this.plugs.filter(p => this.posOf(p)) : []; },
+    bulbPos() { return this.drag === 'bulb' ? this.dragPos : this.bulb && this.bulb.pos; },
+    bulbOnMap() { return !!(this.bulb && this.bulb.configured && this.showBulbs && this.bulbPos); },
+    bulbState() { const b = this.bulb; return !b || !b.online ? 'offline' : b.on ? 'live' : 'off'; },
     homeTitle() { return (this.plan.name || '').trim() || 'Casa'; },
     roomPowers() {
       const out = {};
@@ -43,6 +51,14 @@ createApp({
         out[r.id] = this.plugs.reduce((s, p) => s + (p.pos && p.online && inside(p.pos, r.points) ? p.power_w || 0 : 0), 0);
       });
       return out;
+    },
+    schedDirty() { return !!this.bulb && JSON.stringify(this.schedules) !== JSON.stringify(this.bulb.schedules); },
+    bulbGlow() {
+      const b = this.bulb;
+      if (!b || !b.online || !b.on) return 'var(--off)';
+      if (b.mode === 'colour') return b.color;
+      const t = b.temp / 100, mix = (a, c) => Math.round(a + (c - a) * t);
+      return `rgb(${mix(255, 214)}, ${mix(178, 230)}, ${mix(92, 255)})`;
     },
     costByIp() { return Object.fromEntries(((this.cost && this.cost.plugs) || []).map(c => [c.ip, c])); },
     setupLayout() {
@@ -260,6 +276,50 @@ createApp({
         this.lastFetch = new Date().toLocaleTimeString();
       } catch (e) { this.error = 'No se puede contactar con el servidor: ' + e.message; }
     },
+    setBulb(data) {
+      const clean = !this.schedDirty;
+      this.bulb = data;
+      if (clean) this.schedules = clone(data.schedules);
+    },
+    async refreshBulb() {
+      if (Date.now() < this.bulbHold) return;
+      try { const data = await this.api('/api/bulb'); if (Date.now() >= this.bulbHold) this.setBulb(data); }
+      catch (e) { return; }
+    },
+    bulbDrag(key, e) { this.bulbHold = Date.now() + 4000; this.bulb[key] = +e.target.value; },
+    async bulbSet(change) {
+      this.bulbHold = Date.now() + 4000;
+      Object.assign(this.bulb, change.color ? { ...change, mode: 'colour', on: true } : change);
+      try {
+        const data = await this.api('/api/bulb', { method: 'PATCH', body: JSON.stringify(change) });
+        this.bulbHold = 0;
+        this.setBulb(data);
+      } catch (e) { this.error = 'No se pudo cambiar la bombilla: ' + e.message; this.bulbHold = 0; this.refreshBulb(); }
+    },
+    async saveBulbPos(pos) {
+      const prev = this.bulb.pos;
+      this.bulb.pos = pos;
+      try { await this.api('/api/bulb/pos', { method: 'PUT', body: JSON.stringify({ pos }) }); }
+      catch (e) { this.bulb.pos = prev; this.error = 'No se pudo guardar la posición de la bombilla: ' + e.message; }
+    },
+    toggleDay(s, d) {
+      const i = s.days.indexOf(d);
+      if (i >= 0) { if (s.days.length > 1) s.days.splice(i, 1); } else { s.days.push(d); s.days.sort(); }
+    },
+    addSchedule() {
+      this.schedules.push({ id: Math.random().toString(36).slice(2, 10), time: '20:00', days: [0, 1, 2, 3, 4, 5, 6], enabled: true, on: true, brightness: 80, temp: 0 });
+    },
+    async saveSchedules() {
+      this.schedSaving = true;
+      const list = this.schedules.map(s => ({ ...s, brightness: s.brightness === '' ? null : s.brightness }));
+      try {
+        const { schedules } = await this.api('/api/bulb/schedules', { method: 'PUT', body: JSON.stringify({ schedules: list }) });
+        this.bulb.schedules = schedules;
+        this.schedules = clone(schedules);
+      } catch (e) { this.error = 'No se pudieron guardar los horarios: ' + e.message; }
+      finally { this.schedSaving = false; }
+    },
+    clone: v => clone(v),
     async loadPlan() {
       try {
         const plan = await this.api('/api/plan');
@@ -320,7 +380,7 @@ createApp({
 
     pts: p => p.map(q => q.join(',')).join(' '),
     posOf(p) { return this.drag === p.ip ? this.dragPos : p.pos; },
-    nameOf(ip) { const p = this.plugs.find(q => q.ip === ip); return p ? p.name || p.ip : ip; },
+    nameOf(ip) { if (ip === 'bulb') return this.bulb ? this.bulb.name : 'Bombilla'; const p = this.plugs.find(q => q.ip === ip); return p ? p.name || p.ip : ip; },
     roomPower(r) { return this.roomPowers[r.id] || 0; },
     heat(r) { return this.settings.roomHeat ? .05 + Math.min(1, this.roomPower(r) / 1500) * .3 : .05; },
     roomOf(p) {
@@ -601,6 +661,7 @@ createApp({
       this.savePos(ip, pos);
     },
     async savePos(ip, pos) {
+      if (ip === 'bulb') return this.saveBulbPos(pos);
       const p = this.plugs.find(q => q.ip === ip);
       const prev = p && p.pos;
       if (p) p.pos = pos;
@@ -717,7 +778,10 @@ createApp({
       if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
       else document.documentElement.removeAttribute('data-theme');
     },
-    startPolling() { clearInterval(this.timer); this.timer = setInterval(this.refresh, this.settings.pollMs); },
+    startPolling() {
+      clearInterval(this.timer);
+      this.timer = setInterval(() => { this.refresh(); this.refreshBulb(); }, this.settings.pollMs);
+    },
     openSettings() {
       this.view = 'settings';
       this.api('/api/settings').then(st => { this.serverSettings = st; }).catch(() => {});
@@ -769,7 +833,7 @@ createApp({
   mounted() {
     this.loadSettings(); this.applyTheme();
     this.view = this.settings.startView === 'history' ? 'history' : 'map';
-    this.loadPlan(); this.refresh(); this.loadHistory();
+    this.loadPlan(); this.refresh(); this.refreshBulb(); this.loadHistory();
     this.startPolling();
     this.loadPrefs();
     this.selDay = this.todayIso(); this.loadHours();

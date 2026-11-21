@@ -136,7 +136,11 @@
             <button :class="{ on: iso }" :disabled="edit || planEdit" @click="iso = true">Isométrica</button>
           </div>
           <button v-if="!planEdit" class="btn" :disabled="edit" @click="startPlanEdit">Editar plano</button>
-          <button v-if="!planEdit" class="btn" :class="{ primary: edit }" @click="toggleEdit">{{ edit ? 'Hecho' : 'Colocar enchufes' }}</button>
+          <div v-if="!planEdit && !edit" class="seg" role="group" aria-label="Mostrar en el plano">
+            <button :class="{ on: settings.showPlugs }" :aria-pressed="String(settings.showPlugs)" @click="setSetting('showPlugs', !settings.showPlugs)" title="Mostrar u ocultar los enchufes en el plano">Enchufes</button>
+            <button v-if="bulb && bulb.configured" :class="{ on: settings.showBulbs }" :aria-pressed="String(settings.showBulbs)" @click="setSetting('showBulbs', !settings.showBulbs)" title="Mostrar u ocultar las bombillas en el plano">Bombillas</button>
+          </div>
+          <button v-if="!planEdit" class="btn" :class="{ primary: edit }" @click="toggleEdit">{{ edit ? 'Hecho' : 'Colocar dispositivos' }}</button>
         </div>
         <div v-if="planEdit" class="tray">
           <template v-if="drawing">
@@ -174,6 +178,9 @@
           <span class="hint" v-else>Elige un enchufe y pulsa en el plano. Los que ya están colocados se pueden arrastrar.</span>
           <button v-for="p in plugs" :key="p.ip" class="chip" :class="{ sel: placing === p.ip }" @click="placing = placing === p.ip ? null : p.ip">
             <span class="dot" :style="{ background: statusColor(p) }"></span>{{ p.name || p.ip }}<small v-if="p.pos">· colocado</small>
+          </button>
+          <button v-if="bulb && bulb.configured" class="chip" :class="{ sel: placing === 'bulb' }" @click="placing = placing === 'bulb' ? null : 'bulb'">
+            <span class="dot" :style="{ background: bulbGlow }"></span>{{ bulb.name }}<small v-if="bulb.pos">· colocada</small>
           </button>
         </div>
         <div class="stage" :class="{ iso, edit, planedit: planEdit, drawing, placing: !!placing }">
@@ -239,6 +246,15 @@
               <text class="m-name" y="70">{{ p.name || p.ip }}</text>
               <text class="m-val" y="100">{{ p.online && p.energy_monitoring ? fmt(p.power_w, 1) + ' W' : label(p) }}</text>
             </g>
+            <g v-if="bulbOnMap" class="marker bulb-m" :class="[bulbState, { hl: isHl('bulb') }]" data-marker="bulb" :style="{ '--glow': bulbGlow }"
+               :transform="`translate(${bulbPos[0]} ${bulbPos[1]}) scale(${k})`"
+               @mouseenter="hover = 'bulb'" @mouseleave="hover = null" @click="selected = selected === 'bulb' ? null : 'bulb'">
+              <circle class="halo" r="80"/>
+              <circle class="core" r="34"/>
+              <path class="b-glyph" transform="translate(-18 -19) scale(1.5)" d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.7.6 1.1 1.4 1.1 2.2h5c0-.8.4-1.6 1.1-2.2A6 6 0 0 0 12 3z"/>
+              <text class="m-name" y="70">{{ bulb.name }}</text>
+              <text class="m-val" y="100">{{ !bulb.online ? 'Sin conexión' : bulb.on ? bulb.brightness + ' %' : 'Apagada' }}</text>
+            </g>
             <g v-if="planEdit">
               <polygon v-if="selRoomObj" class="pe-room-sel" :points="pts(selRoomObj.points)"/>
               <line v-for="e in peEdges" :key="e.key" class="pe-edge" :class="{ sel: selEdge && selEdge.o === e.o && selEdge.i === e.i }"
@@ -260,6 +276,88 @@
       </div>
 
       <aside class="devices">
+        <template v-if="bulb && bulb.configured">
+          <div class="dev-head"><h2>Luz</h2></div>
+          <article class="panel bulb" :class="[bulbState, { offline: !bulb.online, lit: bulb.online && bulb.on, hl: isHl('bulb') }]" :style="{ '--glow': bulbGlow }"
+                   data-card="bulb" @mouseenter="hover = 'bulb'" @mouseleave="hover = null">
+            <span class="port" v-if="bulb.pos && showBulbs"></span>
+            <div class="c-head">
+              <span class="b-ico" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path class="b-glass" d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.7.6 1.1 1.4 1.1 2.2h5c0-.8.4-1.6 1.1-2.2A6 6 0 0 0 12 3z"/></svg>
+              </span>
+              <div style="min-width:0">
+                <div class="c-name">{{ bulb.name }}</div>
+                <div class="c-sub">Antela · {{ bulb.ip }}</div>
+              </div>
+              <span class="pill" :class="{ ok: bulb.online && bulb.on, err: !bulb.online }">{{ !bulb.online ? 'Sin conexión' : bulb.on ? 'Encendida' : 'Apagada' }}</span>
+              <button class="switch" role="switch" :aria-checked="String(bulb.on)" :disabled="!bulb.online" aria-label="Encender la bombilla" @click="bulbSet({ on: !bulb.on })"></button>
+            </div>
+            <div v-if="!bulb.online" class="c-err">{{ bulb.error || 'Conectando…' }}</div>
+            <div v-else class="b-ctrl">
+              <div class="seg" role="group" aria-label="Modo de luz">
+                <button :class="{ on: bulb.mode !== 'colour' }" @click="bulbSet({ mode: 'white' })">Blanco</button>
+                <button :class="{ on: bulb.mode === 'colour' }" @click="bulbSet({ mode: 'colour' })">Color</button>
+              </div>
+              <label class="b-row">
+                <span>Brillo</span>
+                <input id="bulb-bright" type="range" min="1" max="100" :value="bulb.brightness" @input="bulbDrag('brightness', $event)" @change="bulbSet({ brightness: +$event.target.value })">
+                <b>{{ bulb.brightness }} %</b>
+              </label>
+              <label v-if="bulb.mode !== 'colour'" class="b-row">
+                <span>Tono</span>
+                <input id="bulb-temp" class="b-temp" type="range" min="0" max="100" :value="bulb.temp" @input="bulbDrag('temp', $event)" @change="bulbSet({ temp: +$event.target.value })">
+                <b>{{ bulb.temp < 34 ? 'Cálida' : bulb.temp > 66 ? 'Fría' : 'Neutra' }}</b>
+              </label>
+              <div v-else class="b-row">
+                <span>Color</span>
+                <div class="b-swatches">
+                  <button v-for="c in bulbColors" :key="c" class="b-sw" :class="{ sel: bulb.color === c }" :style="{ background: c }" :aria-label="'Color ' + c" @click="bulbSet({ color: c })"></button>
+                  <input id="bulb-color" type="color" :value="bulb.color" @change="bulbSet({ color: $event.target.value })" aria-label="Otro color">
+                </div>
+              </div>
+            </div>
+
+            <div class="c-actions" v-if="edit">
+              <button class="btn" @click="placing = 'bulb'">{{ bulb.pos ? 'Mover' : 'Colocar' }}</button>
+              <button class="btn" v-if="bulb.pos" @click="savePos('bulb', null)">Quitar del plano</button>
+            </div>
+
+            <details class="b-sched">
+              <summary>Horarios <span class="muted">· {{ schedules.filter(s => s.enabled).length }} activos</span></summary>
+              <p v-if="!schedules.length" class="note">Sin horarios. Los ejecuta el servidor, así que funcionan aunque cierres esta página.</p>
+              <div v-for="(s, i) in schedules" :key="s.id" class="b-s" :class="{ disabled: !s.enabled }">
+                <div class="b-s-top">
+                  <input type="time" v-model="s.time" :aria-label="'Hora del horario ' + (i + 1)">
+                  <div class="seg" role="group" aria-label="Acción">
+                    <button :class="{ on: s.on }" @click="s.on = true">Encender</button>
+                    <button :class="{ on: !s.on }" @click="s.on = false">Apagar</button>
+                  </div>
+                </div>
+                <div class="b-days" role="group" aria-label="Días">
+                  <button v-for="(d, di) in dayLetters" :key="di" class="b-day" :class="{ on: s.days.includes(di) }" :aria-pressed="String(s.days.includes(di))" @click="toggleDay(s, di)">{{ d }}</button>
+                  <span class="spacer"></span>
+                  <button class="switch" role="switch" :aria-checked="String(s.enabled)" aria-label="Horario activo" @click="s.enabled = !s.enabled"></button>
+                  <button class="x" @click="schedules.splice(i, 1)" :aria-label="'Quitar el horario de las ' + s.time">×</button>
+                </div>
+                <div v-if="s.on" class="b-s-opts">
+                  <label>Brillo <input type="number" min="1" max="100" v-model.number="s.brightness" placeholder="igual"> %</label>
+                  <label>Tono
+                    <select v-model="s.temp">
+                      <option :value="null">igual</option><option :value="0">Cálida</option><option :value="50">Neutra</option><option :value="100">Fría</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+              <div class="btn-row">
+                <button class="btn" @click="addSchedule">+ Añadir</button>
+                <span class="spacer"></span>
+                <button v-if="schedDirty" class="btn" @click="schedules = clone(bulb.schedules)">Descartar</button>
+                <button class="btn primary" :disabled="!schedDirty || schedSaving" @click="saveSchedules">{{ schedSaving ? 'Guardando…' : 'Guardar' }}</button>
+              </div>
+            </details>
+          </article>
+        </template>
+
         <div class="dev-head">
           <h2>Consumo</h2>
           <button class="btn" @click="adding = !adding">Añadir</button>
@@ -280,7 +378,7 @@
 
         <article v-for="p in plugs" :key="p.ip" class="panel card" :class="[state(p), { hl: isHl(p.ip) }]" :data-card="p.ip"
                  @mouseenter="hover = p.ip" @mouseleave="hover = null" @click="selected = selected === p.ip ? null : p.ip">
-          <span class="port" v-if="p.pos"></span>
+          <span class="port" v-if="p.pos && showPlugs"></span>
           <div class="c-head">
             <span class="dot" :style="{ background: statusColor(p), marginTop: '6px' }"></span>
             <div style="min-width:0">
@@ -316,6 +414,10 @@
       <svg v-if="settings.wires" class="wires" aria-hidden="true">
         <g v-for="p in placed" :key="p.ip" class="wire" :class="[state(p), { hl: isHl(p.ip), dim: (hover || selected) && !isHl(p.ip) }]"
            :data-wire="p.ip" :style="{ '--dur': dur(p) + 's', '--w': width(p) + 'px' }">
+          <path class="base"/><path class="flow"/>
+        </g>
+        <g v-if="bulbOnMap" class="wire bulb-w" :class="[bulbState, { hl: isHl('bulb'), dim: (hover || selected) && !isHl('bulb') }]"
+           data-wire="bulb" :style="{ '--glow': bulbGlow }">
           <path class="base"/><path class="flow"/>
         </g>
       </svg>
@@ -469,6 +571,14 @@
         <div class="set-row">
           <div class="lbl"><b>Cables hacia las tarjetas</b><span>Une cada enchufe del plano con su tarjeta de consumo.</span></div>
           <button class="switch" role="switch" :aria-checked="String(settings.wires)" aria-label="Cables hacia las tarjetas" @click="setSetting('wires', !settings.wires)"></button>
+        </div>
+        <div class="set-row">
+          <div class="lbl"><b>Enchufes en el plano</b><span>Ocúltalos para ver el plano más limpio. Siguen en la lista de consumo.</span></div>
+          <button class="switch" role="switch" :aria-checked="String(settings.showPlugs)" aria-label="Enchufes en el plano" @click="setSetting('showPlugs', !settings.showPlugs)"></button>
+        </div>
+        <div class="set-row" v-if="bulb && bulb.configured">
+          <div class="lbl"><b>Bombillas en el plano</b><span>Ocúltalas sin quitarlas: conservan su sitio.</span></div>
+          <button class="switch" role="switch" :aria-checked="String(settings.showBulbs)" aria-label="Bombillas en el plano" @click="setSetting('showBulbs', !settings.showBulbs)"></button>
         </div>
         <div class="set-row">
           <div class="lbl"><b>Colorear salas por consumo</b><span>Cuanto más consume una sala, más intenso su color.</span></div>

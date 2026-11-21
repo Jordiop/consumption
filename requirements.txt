@@ -1,3 +1,4 @@
 plugp100==6.0.2
+tinytuya==1.21.1
 # Solo hace falta si DATABASE_URL apunta a un Postgres
 psycopg[binary]>=3.2
